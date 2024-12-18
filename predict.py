@@ -23,7 +23,7 @@ from diffusers import (
     HeunDiscreteScheduler,
     PNDMScheduler,
     StableDiffusionXLControlNetInpaintPipeline,
-StableDiffusionXLPipeline,
+    StableDiffusionXLPipeline,
     ControlNetModel
 )
 from diffusers.models.attention_processor import LoRAAttnProcessor2_0
@@ -96,20 +96,17 @@ class Predictor(BasePredictor):
             new_unet_params = load_file(
                 os.path.join(local_weights_cache, "unet.safetensors")
             )
-            # this should return _IncompatibleKeys(missing_keys=[...], unexpected_keys=[])
             pipe.unet.load_state_dict(new_unet_params, strict=False)
 
         else:
             print("Loading Unet LoRA")
 
             unet = pipe.unet
-
             tensors = load_file(os.path.join(local_weights_cache, "lora.safetensors"))
 
             unet_lora_attn_procs = {}
             name_rank_map = {}
             for tk, tv in tensors.items():
-                # up is N, d
                 if tk.endswith("up.weight"):
                     proc_name = ".".join(tk.split(".")[:-3])
                     r = tv.shape[1]
@@ -125,9 +122,7 @@ class Predictor(BasePredictor):
                     hidden_size = unet.config.block_out_channels[-1]
                 elif name.startswith("up_blocks"):
                     block_id = int(name[len("up_blocks.")])
-                    hidden_size = list(reversed(unet.config.block_out_channels))[
-                        block_id
-                    ]
+                    hidden_size = list(reversed(unet.config.block_out_channels))[block_id]
                 elif name.startswith("down_blocks"):
                     block_id = int(name[len("down_blocks.")])
                     hidden_size = unet.config.block_out_channels[block_id]
@@ -156,9 +151,7 @@ class Predictor(BasePredictor):
         self.tuned_model = True
 
     def setup(self, weights: Optional[Path] = None):
-        """Load the model into memory to make running multiple predictions efficient"""
         start = time.time()
-        
         pget_manifest()
         
         self.tuned_model = False
@@ -197,7 +190,6 @@ class Predictor(BasePredictor):
         if weights or os.path.exists("./trained-model"):
             self.load_trained_weights(weights, self.pipe)
 
-
         print("setup took: ", time.time() - start)
 
     def load_image(self, path):
@@ -218,10 +210,6 @@ class Predictor(BasePredictor):
         return image, new_width, new_height
     
     def resize_to_allowed_dimensions(self, width, height):
-        """
-        Function re-used from Lucataco's implementation of SDXL-Controlnet for Replicate
-        """
-        # List of SDXL dimensions
         allowed_dimensions = [
             (512, 2048), (512, 1984), (512, 1920), (512, 1856),
             (576, 1792), (576, 1728), (576, 1664), (640, 1600),
@@ -234,9 +222,7 @@ class Predictor(BasePredictor):
             (1600, 640), (1664, 576), (1728, 576), (1792, 576),
             (1856, 512), (1920, 512), (1984, 512), (2048, 512)
         ]
-        # Calculate the aspect ratio
         aspect_ratio = width / height
-        # Find the closest allowed dimensions that maintain the aspect ratio
         closest_dimensions = min(
             allowed_dimensions,
             key=lambda dim: abs(dim[0] / dim[1] - aspect_ratio)
@@ -255,31 +241,22 @@ class Predictor(BasePredictor):
         return image, has_nsfw_concept
         
     def add_outpaint_pixels(self, image, outpaint_directions, outpaint_size1, outpaint_size2, color):
-        """
-        Outpaints the given PIL image in the specified direction by the given size.
-        If the color is 'noise', it outpaints with blocky (4x4 by default) noisy pixels.
-        """
-        
         original_width, original_height = image.size
         
         if outpaint_direction == 'horizontal':
-            #left side
             new_size = (original_width + outpaint_size2, original_height)
             paste_position = (outpaint_size, 0)
             new_image = Image.new("RGB", new_size, color)
             new_image.paste(image, paste_position)
-            # right side
             new_size = (new_image.size[0] + outpaint_size1, original_height)
             paste_position = (0, 0)
             new_image = Image.new("RGB", new_size, color)
             new_image.paste(image, paste_position)
         elif outpaint_direction == 'vertical':
-            # up side
             new_size = (original_width, original_height + outpaint_size1)
             paste_position = (0, outpaint_size)
             new_image = Image.new("RGB", new_size, color)
             new_image.paste(image, paste_position)
-            # down side
             new_size = (original_width, original_height + outpaint_size2)
             paste_position = (0, 0)
             new_image = Image.new("RGB", new_size, color)
@@ -366,7 +343,6 @@ class Predictor(BasePredictor):
         ),
 
     ) -> List[Path]:
-        """Run a single prediction on the model"""
         if seed is None:
             seed = int.from_bytes(os.urandom(2), "big")
         print(f"Using seed: {seed}")
@@ -380,14 +356,12 @@ class Predictor(BasePredictor):
 
         sdxl_kwargs = {}
         if self.tuned_model:
-            # consistency with fine-tuning API
             for k, v in self.token_map.items():
                 prompt = prompt.replace(k, v)
 
         pipe = self.pipe
 
         if not apply_watermark:
-            # toggles watermark for this prediction
             watermark_cache = pipe.watermark
             pipe.watermark = None
 
@@ -397,7 +371,12 @@ class Predictor(BasePredictor):
         loaded_image = self.load_image(image)
         print("Applying smart preprocessing...")
 
-        outpaint_sizes = { "left":outpaint_left, "up":outpaint_up, "right":outpaint_right, "down":outpaint_down}
+        outpaint_sizes = {
+            "left": outpaint_left,
+            "up": outpaint_up,
+            "right": outpaint_right,
+            "down": outpaint_down
+        }
 
         sdxl_kwargs["image"] = fill_outpaint_area(loaded_image, outpaint_sizes, "patch")
         sdxl_kwargs["mask_image"] = fill_outpaint_area(loaded_image, outpaint_sizes, "black", is_mask=True)
@@ -410,26 +389,37 @@ class Predictor(BasePredictor):
             "generator": generator,
             "controlnet_conditioning_scale": condition_scale,
             "num_inference_steps": 20,
-            "strength": 0.99
+            "strength": 0.99,
+            "return_latents": True
         }
 
         if self.is_lora:
             sdxl_kwargs["cross_attention_kwargs"] = {"scale": lora_scale}
 
+        # Run the pipeline returning latents
         output = pipe(**common_args, **sdxl_kwargs)
         
         if not apply_watermark:
             pipe.watermark = watermark_cache
 
-        _, has_nsfw_content = self.run_safety_checker(output.images)
+        # Decode latents once at the end
+        final_image_tensors = pipe.decode_latents(output.latents)
+        if pipe.watermark is not None:
+            final_image_tensors = pipe.watermark.apply_watermark(final_image_tensors)
+
+        # Convert decoded tensors to PIL
+        decoded_images = pipe.numpy_to_pil(final_image_tensors)
+
+        # Run safety checker on final images
+        _, has_nsfw_content = self.run_safety_checker(decoded_images)
 
         output_paths = []
-        for i, nsfw in enumerate(has_nsfw_content):
+        for i, (img, nsfw) in enumerate(zip(decoded_images, has_nsfw_content)):
             if nsfw:
                 print(f"NSFW content detected in image {i}")
                 continue
             output_path = f"/tmp/out-{i}.png"
-            output.images[i].save(output_path)
+            img.save(output_path)
             output_paths.append(Path(output_path))
 
         if len(output_paths) == 0:
